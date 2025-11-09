@@ -28,6 +28,9 @@ struct Config {
     device_id: String,
     #[serde(default)]
     hardware: String,
+    // Debug 模式
+    #[serde(default)]
+    debug: bool,
     // WebSocket 超时配置（秒）
     #[serde(default = "default_max_connections")]
     max_connections: usize,
@@ -76,6 +79,7 @@ impl Config {
             message_timeout: Duration::from_secs(self.message_timeout),
             heartbeat_interval: Duration::from_secs(self.heartbeat_interval),
             idle_timeout: Duration::from_secs(self.idle_timeout),
+            debug: self.debug,
         }
     }
 }

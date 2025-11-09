@@ -22,6 +22,7 @@ pub struct WsConfig {
     pub message_timeout: Duration,
     pub heartbeat_interval: Duration,
     pub idle_timeout: Duration,
+    pub debug: bool,
 }
 
 /// WebSocket API 请求
@@ -120,6 +121,7 @@ impl WsServer {
         eprintln!("消息处理超时: {:?}", self.config.message_timeout);
         eprintln!("心跳间隔: {:?}", self.config.heartbeat_interval);
         eprintln!("空闲超时: {:?}", self.config.idle_timeout);
+        eprintln!("调试模式: {}", if self.config.debug { "开启 🔍" } else { "关闭" });
         eprintln!("按 Ctrl+C 停止服务\n");
 
         loop {
@@ -394,6 +396,7 @@ async fn handle_connection(
     // 消息接收循环，使用较长的空闲超时
     let idle_timeout = config.idle_timeout;
     let message_timeout = config.message_timeout;
+    let debug = config.debug;
     loop {
         let msg_result = match timeout(idle_timeout, ws_receiver.next()).await {
             Ok(Some(result)) => result,
@@ -479,7 +482,7 @@ async fn handle_connection(
                 // 添加 API 请求处理超时
                 match timeout(message_timeout, async {
                     let xiaoai_guard = xiaoai.read().await;
-                    handle_request(request, &*xiaoai_guard, ws_sender_clone).await
+                    handle_request(request, &*xiaoai_guard, ws_sender_clone, debug).await
                 }).await {
                     Ok(response) => response,
                     Err(_) => {
@@ -534,8 +537,13 @@ async fn handle_request(
     request: ApiRequest,
     xiaoai: &Xiaoai,
     _ws_sender: Arc<Mutex<futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>>>,
+    debug: bool,
 ) -> ApiResponse {
     // 为每个请求添加日志和错误处理
+    if debug {
+        eprintln!("🔍 [DEBUG] 收到请求: {:?}", request);
+    }
+    
     let result = match &request {
         ApiRequest::Say { device_id, text } => {
             eprintln!("🗣️ 执行 TTS: 设备={}, 文本={}", device_id, text);
@@ -570,6 +578,9 @@ async fn handle_request(
             eprintln!("📊 获取状态: 设备={}", device_id);
             match xiaoai.player_status_parsed(device_id).await {
                 Ok(status) => {
+                    if debug {
+                        eprintln!("🔍 [DEBUG] 状态原始响应: {}", serde_json::to_string_pretty(&status.raw).unwrap_or_else(|_| "无法序列化".to_string()));
+                    }
                     eprintln!("✅ 状态获取成功");
                     return ApiResponse::Success {
                         code: 0,
@@ -579,6 +590,9 @@ async fn handle_request(
                 }
                 Err(e) => {
                     eprintln!("❌ 获取状态失败: {}", e);
+                    if debug {
+                        eprintln!("🔍 [DEBUG] 错误详情: {:?}", e);
+                    }
                     return ApiResponse::Error {
                         error: format!("获取状态失败: {}", e),
                     };
@@ -590,6 +604,11 @@ async fn handle_request(
             match xiaoai.device_info().await {
                 Ok(devices) => {
                     eprintln!("✅ 设备列表获取成功，共 {} 个设备", devices.len());
+                    if debug {
+                        for device in &devices {
+                            eprintln!("🔍 [DEBUG] 设备: {} (ID: {}, 硬件: {})", device.name, device.device_id, device.hardware);
+                        }
+                    }
                     let device_data = devices
                         .into_iter()
                         .map(|d| DeviceData {
@@ -605,6 +624,9 @@ async fn handle_request(
                 }
                 Err(e) => {
                     eprintln!("❌ 获取设备列表失败: {}", e);
+                    if debug {
+                        eprintln!("🔍 [DEBUG] 错误详情: {:?}", e);
+                    }
                     return ApiResponse::Error {
                         error: format!("获取设备列表失败: {}", e),
                     };
@@ -615,6 +637,22 @@ async fn handle_request(
     
     match result {
         Ok(response) => {
+            if debug {
+                eprintln!("🔍 [DEBUG] API 响应 code={}, message={}", response.code, response.message);
+                eprintln!("🔍 [DEBUG] API 响应 data={}", serde_json::to_string(&response.data).unwrap_or_else(|_| "无法序列化".to_string()));
+            }
+            
+            // 检查 API 返回的错误码
+            if response.code != 0 {
+                eprintln!("⚠️ API 返回错误码 {}: {}", response.code, response.message);
+                if debug {
+                    eprintln!("🔍 [DEBUG] 错误数据: {}", serde_json::to_string_pretty(&response.data).unwrap_or_else(|_| "无法序列化".to_string()));
+                }
+                return ApiResponse::Error {
+                    error: format!("API 返回 {}: {}", response.code, response.message),
+                };
+            }
+            
             eprintln!("✅ API 请求成功: code={}, message={}", response.code, response.message);
             ApiResponse::Success {
                 code: response.code,
@@ -624,6 +662,9 @@ async fn handle_request(
         }
         Err(e) => {
             eprintln!("❌ API 请求失败: {}", e);
+            if debug {
+                eprintln!("🔍 [DEBUG] 错误详情: {:?}", e);
+            }
             ApiResponse::Error {
                 error: format!("{}", e),
             }

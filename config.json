@@ -6,6 +6,9 @@
   "device_id": "",
   "hardware": "",
   
+  "_comment_debug": "调试模式：开启后会输出详细的请求和响应日志",
+  "debug": false,
+  
   "_comment_timeout": "WebSocket 超时配置（单位：秒）",
   "max_connections": 100,
   "handshake_timeout": 10,
