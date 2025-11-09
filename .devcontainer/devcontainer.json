@@ -1,0 +1,20 @@
+{
+  "name": "Rust",
+  "image": "mcr.microsoft.com/vscode/devcontainers/rust:1-bullseye",
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {},
+    "ghcr.io/devcontainers/features/common-utils:2": {
+    "installZsh": true,
+    "installApt": [
+      "pkg-config",
+      "libssl-dev"
+    ]
+  }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "vadimcn.vscode-lldb"]
+    }
+  },
+  "postCreateCommand": "rustc --version"
+}
