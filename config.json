@@ -1,0 +1,21 @@
+{
+  "username": "",
+  "password": "",
+  "ws_port": 8080,
+  "check": false,
+  "device_id": "",
+  "hardware": "",
+  "keywords": [
+    "请问",
+    "请帮我",
+    "你好",
+    "嗨",
+    "播放",
+    "来首"
+  ],
+  "initial_interval": 1.0,
+  "min_interval": 0.2,
+  "max_interval": 3.0,
+  "fetch_limit": 1,
+  "block_xiaoai_response": true
+}

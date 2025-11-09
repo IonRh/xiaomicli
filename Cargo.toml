@@ -1,0 +1,7 @@
+[workspace]
+members = ["cli", "miai"]
+resolver = "3"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"

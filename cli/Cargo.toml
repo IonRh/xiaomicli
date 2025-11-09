@@ -1,0 +1,26 @@
+[package]
+name = "miai-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.48", features = ["derive"] }
+inquire = "0.9.1"
+miai = { path = "../miai" }
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "net", "sync"] }
+url = "2.5.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+openssl = { version = "0.10", features = ["vendored"], optional = true }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+[[bin]]
+path = "src/main.rs"
+name = "xiaoai"
+
+[features]
+# https://github.com/cross-rs/cross/wiki/FAQ#openssl-is-not-installed
+vendored-openssl = ["dep:openssl"]
