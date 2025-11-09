@@ -8,12 +8,13 @@ use url::Url;
 use serde::{Deserialize, Serialize};
 
 mod ws_server;
-use ws_server::WsServer;
+use ws_server::{WsServer, WsConfig};
+use std::time::Duration;
 
 const DEFAULT_AUTH_FILE: &str = "xiaoai-auth.json";
 const DEFAULT_CONFIG_FILE: &str = "config.json";
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 struct Config {
     #[serde(default)]
     username: String,
@@ -27,12 +28,56 @@ struct Config {
     device_id: String,
     #[serde(default)]
     hardware: String,
+    // WebSocket 超时配置（秒）
+    #[serde(default = "default_max_connections")]
+    max_connections: usize,
+    #[serde(default = "default_handshake_timeout")]
+    handshake_timeout: u64,
+    #[serde(default = "default_message_timeout")]
+    message_timeout: u64,
+    #[serde(default = "default_heartbeat_interval")]
+    heartbeat_interval: u64,
+    #[serde(default = "default_idle_timeout")]
+    idle_timeout: u64,
     #[serde(flatten)]
     watcher_config: serde_json::Value,
 }
 
 fn default_ws_port() -> u16 {
     8080
+}
+
+fn default_max_connections() -> usize {
+    100
+}
+
+fn default_handshake_timeout() -> u64 {
+    10
+}
+
+fn default_message_timeout() -> u64 {
+    30
+}
+
+fn default_heartbeat_interval() -> u64 {
+    30
+}
+
+fn default_idle_timeout() -> u64 {
+    300
+}
+
+impl Config {
+    fn to_ws_config(&self) -> WsConfig {
+        WsConfig {
+            port: self.ws_port,
+            max_connections: self.max_connections,
+            handshake_timeout: Duration::from_secs(self.handshake_timeout),
+            message_timeout: Duration::from_secs(self.message_timeout),
+            heartbeat_interval: Duration::from_secs(self.heartbeat_interval),
+            idle_timeout: Duration::from_secs(self.idle_timeout),
+        }
+    }
 }
 
 #[tokio::main]
@@ -133,8 +178,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
             
-            // 创建 WebSocket 服务器
-            let server = WsServer::new(xiaoai.clone(), config.ws_port);
+            // 创建 WebSocket 服务器，传入配置
+            let ws_config = config.to_ws_config();
+            let server = WsServer::new(xiaoai.clone(), ws_config);
             let server_watch = server.clone();
             
             eprintln!("🚀 启动服务器和关键词监听...");
@@ -157,7 +203,8 @@ async fn main() -> anyhow::Result<()> {
         } else {
             eprintln!("🚀 启动纯 WebSocket API 服务器（无关键词监听）...");
             
-            let server = WsServer::new(xiaoai.clone(), config.ws_port);
+            let ws_config = config.to_ws_config();
+            let server = WsServer::new(xiaoai.clone(), ws_config);
             match server.run_server().await {
                 Ok(_) => eprintln!("✅ WebSocket 服务器正常退出"),
                 Err(e) => {

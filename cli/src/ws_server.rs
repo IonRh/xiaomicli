@@ -14,10 +14,15 @@ type ClientSender = futures_util::stream::SplitSink<tokio_tungstenite::WebSocket
 type Clients = Arc<RwLock<Vec<Arc<Mutex<ClientSender>>>>>;
 
 /// WebSocket 服务器配置
-const MAX_CONNECTIONS: usize = 100;  // 最大连接数
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);  // 握手超时
-const MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);    // 消息处理超时
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45); // 心跳间隔
+#[derive(Debug, Clone)]
+pub struct WsConfig {
+    pub port: u16,
+    pub max_connections: usize,
+    pub handshake_timeout: Duration,
+    pub message_timeout: Duration,
+    pub heartbeat_interval: Duration,
+    pub idle_timeout: Duration,
+}
 
 /// WebSocket API 请求
 #[derive(Debug, Deserialize)]
@@ -85,33 +90,36 @@ struct DeviceData {
 #[derive(Clone)]
 pub struct WsServer {
     xiaoai: Arc<RwLock<Xiaoai>>,
-    port: u16,
+    config: WsConfig,
     clients: Clients,
     connection_count: Arc<AtomicUsize>,
     connection_semaphore: Arc<Semaphore>,
 }
 
 impl WsServer {
-    pub fn new(xiaoai: Xiaoai, port: u16) -> Self {
+    pub fn new(xiaoai: Xiaoai, config: WsConfig) -> Self {
         Self {
             xiaoai: Arc::new(RwLock::new(xiaoai)),
-            port,
+            connection_semaphore: Arc::new(Semaphore::new(config.max_connections)),
+            config,
             clients: Arc::new(RwLock::new(Vec::new())),
             connection_count: Arc::new(AtomicUsize::new(0)),
-            connection_semaphore: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         }
     }
 
     pub async fn run_server(&self) -> Result<()> {
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.port));
         
         // 配置 TCP 监听器
         let listener = TcpListener::bind(&addr).await?;
         
         eprintln!("🚀 WebSocket 服务器已启动");
         eprintln!("监听地址: ws://{}", addr);
-        eprintln!("最大连接数: {}", MAX_CONNECTIONS);
-        eprintln!("握手超时: {:?}", HANDSHAKE_TIMEOUT);
+        eprintln!("最大连接数: {}", self.config.max_connections);
+        eprintln!("握手超时: {:?}", self.config.handshake_timeout);
+        eprintln!("消息处理超时: {:?}", self.config.message_timeout);
+        eprintln!("心跳间隔: {:?}", self.config.heartbeat_interval);
+        eprintln!("空闲超时: {:?}", self.config.idle_timeout);
         eprintln!("按 Ctrl+C 停止服务\n");
 
         loop {
@@ -119,8 +127,8 @@ impl WsServer {
                 Ok((mut stream, peer_addr)) => {
                     // 检查连接数限制
                     let current_connections = self.connection_count.load(Ordering::Relaxed);
-                    if current_connections >= MAX_CONNECTIONS {
-                        eprintln!("⚠️  连接数已达上限 ({}), 拒绝新连接 {}", MAX_CONNECTIONS, peer_addr);
+                    if current_connections >= self.config.max_connections {
+                        eprintln!("⚠️  连接数已达上限 ({}), 拒绝新连接 {}", self.config.max_connections, peer_addr);
                         let _ = stream.shutdown().await;
                         continue;
                     }
@@ -130,6 +138,7 @@ impl WsServer {
                         let xiaoai = Arc::clone(&self.xiaoai);
                         let clients = Arc::clone(&self.clients);
                         let connection_count = Arc::clone(&self.connection_count);
+                        let config = self.config.clone();
                         
                         // 增加连接计数
                         connection_count.fetch_add(1, Ordering::Relaxed);
@@ -137,7 +146,7 @@ impl WsServer {
                         tokio::spawn(async move {
                             let _permit = permit; // 持有许可直到任务结束
                             
-                            if let Err(e) = handle_connection_with_timeout(stream, peer_addr, xiaoai, clients).await {
+                            if let Err(e) = handle_connection_with_timeout(stream, peer_addr, xiaoai, clients, config).await {
                                 eprintln!("⚠️  处理连接 {} 时出错: {}", peer_addr, e);
                             }
                             
@@ -298,20 +307,17 @@ async fn broadcast_message(clients: &Clients, message: String) {
     }
 }
 
-/// 带超时控制的连接处理
+/// 带超时控制的连接处理（仅限握手阶段）
 async fn handle_connection_with_timeout(
     stream: TcpStream,
     peer_addr: SocketAddr,
     xiaoai: Arc<RwLock<Xiaoai>>,
     clients: Clients,
+    config: WsConfig,
 ) -> Result<()> {
-    match timeout(HANDSHAKE_TIMEOUT, handle_connection(stream, peer_addr, xiaoai, clients)).await {
-        Ok(result) => result,
-        Err(_) => {
-            eprintln!("❌ 连接处理超时: {}", peer_addr);
-            Err(anyhow::anyhow!("连接处理超时"))
-        }
-    }
+    // 直接调用 handle_connection，不再包裹整个连接处理过程
+    // 超时控制已经在 handle_connection 内部的握手阶段实现
+    handle_connection(stream, peer_addr, xiaoai, clients, config).await
 }
 
 async fn handle_connection(
@@ -319,6 +325,7 @@ async fn handle_connection(
     peer_addr: SocketAddr,
     xiaoai: Arc<RwLock<Xiaoai>>,
     clients: Clients,
+    config: WsConfig,
 ) -> Result<()> {
     eprintln!("✅ 新连接: {}", peer_addr);
     
@@ -353,8 +360,9 @@ async fn handle_connection(
     
     // 启动心跳任务 - 使用更长的间隔避免过于频繁
     let ws_sender_heartbeat = Arc::clone(&ws_sender);
+    let heartbeat_interval_duration = config.heartbeat_interval;
     let heartbeat_task = tokio::spawn(async move {
-        let mut heartbeat_interval = interval(HEARTBEAT_INTERVAL);
+        let mut heartbeat_interval = interval(heartbeat_interval_duration);
         heartbeat_interval.tick().await; // 跳过第一次立即触发
         
         loop {
@@ -383,26 +391,29 @@ async fn handle_connection(
         }
     });
     
-    // 消息接收循环，使用较长的超时避免过于敏感
+    // 消息接收循环，使用较长的空闲超时
+    let idle_timeout = config.idle_timeout;
+    let message_timeout = config.message_timeout;
     loop {
-        let msg_result = match timeout(Duration::from_secs(120), ws_receiver.next()).await {
+        let msg_result = match timeout(idle_timeout, ws_receiver.next()).await {
             Ok(Some(result)) => result,
             Ok(None) => {
                 eprintln!("📟 连接流结束: {}", peer_addr);
                 break;
             }
             Err(_) => {
-                // 2分钟无消息，检查连接状态
-                eprintln!("⏱️  长时间无消息: {}", peer_addr);
+                // 5分钟无消息，发送 ping 检查连接状态
+                eprintln!("⏱️  长时间无消息（{}秒），检查连接状态: {}", idle_timeout.as_secs(), peer_addr);
                 
                 // 使用超时的 ping 检查连接
-                let ping_result = timeout(Duration::from_secs(3), async {
+                let ping_result = timeout(Duration::from_secs(5), async {
                     let mut sender = ws_sender.lock().await;
                     sender.send(Message::Ping(vec![])).await
                 }).await;
                 
                 match ping_result {
                     Ok(Ok(_)) => {
+                        eprintln!("✅ 连接检查通过: {}", peer_addr);
                         // ping 发送成功，继续等待
                         continue;
                     }
@@ -466,7 +477,7 @@ async fn handle_connection(
                 let ws_sender_clone = Arc::clone(&ws_sender);
                 
                 // 添加 API 请求处理超时
-                match timeout(MESSAGE_TIMEOUT, async {
+                match timeout(message_timeout, async {
                     let xiaoai_guard = xiaoai.read().await;
                     handle_request(request, &*xiaoai_guard, ws_sender_clone).await
                 }).await {

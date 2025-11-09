@@ -5,6 +5,15 @@
   "check": false,
   "device_id": "",
   "hardware": "",
+  
+  "_comment_timeout": "WebSocket 超时配置（单位：秒）",
+  "max_connections": 100,
+  "handshake_timeout": 10,
+  "message_timeout": 30,
+  "heartbeat_interval": 30,
+  "idle_timeout": 300,
+  
+  "_comment_keywords": "关键词监听配置",
   "keywords": [
     "请问",
     "请帮我",
